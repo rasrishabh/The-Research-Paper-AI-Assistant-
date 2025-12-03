@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import os
 from ragpart import (generate_response_from_chunks, get_relevant_chunks, 
                     extract_text_from_pdf, clean_text, store_chunks_in_neo4j, 
                     combined_chunking, Neo4jDatabase, initialize_database)
@@ -42,7 +43,12 @@ def reset_page():
     st.session_state.cluster = None
 
 # Streamlit app
-st.sidebar.image("AI Research Paper Writer.png")
+# Fix image path using os.path
+image_path = os.path.join(os.path.dirname(__file__), "AI Research Paper Writer.png")
+if os.path.exists(image_path):
+    st.sidebar.image(image_path)
+else:
+    st.sidebar.warning("Image file not found. Please ensure 'AI Research Paper Writer.png' is in the same directory as app.py")
 st.title("Academic Research Paper Assistant Application")
 st.sidebar.title("PDF Research Assistant")
 
@@ -61,6 +67,9 @@ def process_local_pdfs(data):
     # Check if data is a DataFrame
     if isinstance(data, pd.DataFrame):
         data = data.to_dict()
+        if 'text' not in data:
+            st.error("DataFrame does not contain 'text' column")
+            return []
         data = data['text']
 
     # If data is a list of uploaded files
@@ -100,33 +109,54 @@ def handle_query_response(query, lang):
 
 # Handle Local PDF Processing
 if Source == "Local":
+    # Debug: Show source selection
+    st.write("Source selected:", Source)
+    st.write("Session state DB:", st.session_state.db is not None)
+    
     data = st.sidebar.file_uploader("Upload a PDF", type="pdf", accept_multiple_files=True)
     if data and not st.session_state.papers_downloaded:
         
-        if st.toggle("Cluster By Similarity", value=True):
+        # Fix: Replace st.toggle() with st.checkbox()
+        if st.checkbox("Cluster By Similarity", value=True):
             pdf_texts = text_from_file_uploader(data)
-            processed_documents = tokenize_text(pdf_texts)
-            result_df, fig = clustering(pdf_texts, processed_documents)
-            if fig != "Error":
-                st.pyplot(fig)
-                st.write(result_df)
-                selected_cluster = st.text_input("Enter Cluster number")
-                if st.button("Process Cluster") and selected_cluster:
-                    st.write(f"Processing cluster: {selected_cluster}")
-                    selected_cluster = int(selected_cluster)
-                    result_df = result_df[result_df['Cluster'] == selected_cluster]
+            # Debug: Check if pdf_texts is loaded
+            st.write("PDF texts loaded:", pdf_texts is not None if pdf_texts else False)
+            
+            if pdf_texts:
+                processed_documents = tokenize_text(pdf_texts)
+                # Debug: Check if processed_documents is created
+                st.write("Processed documents:", processed_documents is not None if processed_documents else False)
+                
+                if processed_documents:
+                    result_df, fig = clustering(pdf_texts, processed_documents)
+                    # Fix: Ensure fig is a matplotlib figure before plotting
+                    if fig != "Error" and fig is not None:
+                        try:
+                            st.pyplot(fig)
+                            st.write(result_df)
+                            selected_cluster = st.text_input("Enter Cluster number")
+                            if st.button("Process Cluster") and selected_cluster:
+                                st.write(f"Processing cluster: {selected_cluster}")
+                                selected_cluster = int(selected_cluster)
+                                result_df = result_df[result_df['Cluster'] == selected_cluster]
 
-                    with st.spinner("Processing PDFs..."):
-                        combined_chunks = process_local_pdfs(result_df)
-                        st.session_state.db = initialize_database()
-                        if st.session_state.db:
-                            store_chunks_in_neo4j(combined_chunks, st.session_state.db)
-                            st.session_state.papers_downloaded = True
-                            st.success("PDF processed and indexed successfully!")
-                        else:
-                            st.error("Failed to initialize Neo4j database.")
+                                with st.spinner("Processing PDFs..."):
+                                    combined_chunks = process_local_pdfs(result_df)
+                                    st.session_state.db = initialize_database()
+                                    if st.session_state.db:
+                                        store_chunks_in_neo4j(combined_chunks, st.session_state.db)
+                                        st.session_state.papers_downloaded = True
+                                        st.success("PDF processed and indexed successfully!")
+                                    else:
+                                        st.error("Failed to initialize Neo4j database.")
+                        except Exception as e:
+                            st.error(f"Error displaying plot: {e}")
+                    else:
+                        st.write("Too Few Papers for Clustering")
+                else:
+                    st.error("Failed to process documents for clustering.")
             else:
-                st.write("Too Few Papers for Clustering")
+                st.error("Failed to extract text from uploaded PDFs.")
         else:
             with st.spinner("Processing PDFs..."):
                 combined_chunks = process_local_pdfs(data)
@@ -140,12 +170,17 @@ if Source == "Local":
 
 # Handle Web Search and Download
 if Source == "Web":
+    # Debug: Show source selection
+    st.write("Source selected:", Source)
+    
     search = st.text_input("Enter the search query: ")
     max_results = st.slider("Maximum results:", 10, 100)
     if st.button("Search"):
         st.session_state.search = search_arxiv(search, max_results)
         st.session_state.selected_indices = []  # Reset selection on new search
         st.session_state.download = False
+        # Debug: Show search results
+        st.write("Search results found:", len(st.session_state.search) if st.session_state.search else 0)
 
     if st.session_state.search:
         arxiv_results = st.session_state.search
@@ -188,7 +223,10 @@ if st.session_state.db:
             st.session_state.query = query
     if st.button("Ask") and st.session_state.query:
         with st.spinner("Searching for answers..."):
-            handle_query_response(st.session_state.query, lang)
+            try:
+                handle_query_response(st.session_state.query, lang)
+            except Exception as e:
+                st.error(f"Error processing query: {e}")
         
     if st.button("End conversation"):
         reset_page()
